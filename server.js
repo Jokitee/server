@@ -270,9 +270,12 @@ const validateBookData = (req, res, next) => {
     next();
 };
 
-// Helper function to validate URL format
+// Helper function to validate URL format, allowing WeChat local/temp protocols
 const isValidUrl = (url) => {
     try {
+        if (url.startsWith('wxfile://') || url.startsWith('http://tmp/')) {
+            return true;
+        }
         new URL(url);
         return true;
     } catch (e) {
