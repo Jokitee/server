@@ -16,14 +16,17 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Debugging middleware for static files
-app.use('/public', (req, res, next) => {
-    console.log(`[Static Request] ${req.method} ${req.url}`);
+app.use((req, res, next) => {
+    if (req.url.startsWith('/public/')) {
+        console.log(`[Static Request] ${req.method} ${req.url}`);
+    }
     next();
 });
 
-// Serve static files (like uploaded images or generated presets)
+// Serve static files (like uploaded images or generated presets). 
+// Remove the '/public' prefix aliasing to ensure the physical path perfectly matches the URL path
 app.use('/public', express.static(path.join(__dirname, 'public'), {
-    fallthrough: true // Allow it to fall through to 404 handler if not found, instead of crashing with 500
+    fallthrough: false
 }));
 
 // Rate limiting middleware (basic implementation)
