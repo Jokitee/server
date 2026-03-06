@@ -129,9 +129,10 @@ const db = new sqlite3.Database(dbPath, (err) => {
                     if (err) console.error('Error creating date index:', err.message);
                 });
 
-                db.run('CREATE INDEX IF NOT EXISTS idx_books_university ON books(university)', (err) => {
-                    if (err) console.error('Error creating university index:', err.message);
-                });
+                // In a production environment with existing data, this would need an ALTER TABLE
+                // db.run('CREATE INDEX IF NOT EXISTS idx_books_university ON books(university)', (err) => {
+                //     if (err) console.error('Error creating university index:', err.message);
+                // });
             }
         });
 
