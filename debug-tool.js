@@ -72,9 +72,13 @@ class DebugTool {
     try {
       const bookData = {
         title: `Test Book ${Date.now()}`,
+        author: `Author ${Date.now()}`,
         isbn: `${Math.floor(Math.random() * 9000000000000 + 1000000000000)}`, // Random 13-digit ISBN
         price: Math.random() * 100 + 1, // Random price between 1-101
+        original_price: Math.random() * 200 + 20, // Random original price
+        condition: ['new', 'like_new', 'good', 'fair', 'poor'][Math.floor(Math.random() * 5)], // Random condition
         description: 'This is a test book created for debugging purposes.',
+        category: ['Education', 'Fiction', 'Science', 'Technology', 'Art'][Math.floor(Math.random() * 5)], // Random category
         seller_id: userId
       };
 

@@ -78,7 +78,7 @@ curl -X POST http://localhost:3000/api/users \
 ```bash
 curl -X POST http://localhost:3000/api/books \
   -H "Content-Type: application/json" \
-  -d '{"title":"Test Book","isbn":"1234567890123","price":29.99,"description":"A test book"}'
+  -d '{"title":"Test Book","author":"John Doe","isbn":"1234567890123","price":29.99,"original_price":59.99,"condition":"good","description":"A test book","category":"Education","seller_id":1}'
 ```
 
 ### 获取特定书籍
