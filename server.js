@@ -23,7 +23,7 @@ app.use('/public', (req, res, next) => {
 
 // Serve static files (like uploaded images or generated presets)
 app.use('/public', express.static(path.join(__dirname, 'public'), {
-    fallthrough: false // This will force express.static to throw a 404 instead of passing to the next middleware if file not found
+    fallthrough: true // Allow it to fall through to 404 handler if not found, instead of crashing with 500
 }));
 
 // Rate limiting middleware (basic implementation)
