@@ -159,6 +159,26 @@ const db = new sqlite3.Database(dbPath, (err) => {
                 db.run('CREATE INDEX IF NOT EXISTS idx_messages_book ON messages(book_id)');
             }
         });
+
+        // Perform safe schema migrations for existing databases
+        const migrations = [
+            "ALTER TABLE users ADD COLUMN avatar_url TEXT;",
+            "ALTER TABLE users ADD COLUMN university TEXT;",
+            "ALTER TABLE books ADD COLUMN university TEXT;"
+        ];
+
+        migrations.forEach(sql => {
+            db.run(sql, (err) => {
+                if (err) {
+                    // Ignore "duplicate column name" errors which mean that the column already exists
+                    if (!err.message.includes('duplicate column name')) {
+                        console.error(`Migration error (${sql}):`, err.message);
+                    }
+                } else {
+                    console.log(`Migration successful: ${sql}`);
+                }
+            });
+        });
     }
 });
 
