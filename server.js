@@ -12,6 +12,7 @@ app.use(cors({
     origin: '*', // In production, replace with specific domain
     credentials: true
 }));
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Serve static files (like uploaded images or generated presets)
@@ -669,15 +670,15 @@ app.get('/', (req, res) => {
     });
 });
 
-// Error handling middleware
+// 404 handler (Catch-all for unhandled routes)
+app.use((req, res, next) => {
+    res.status(404).json({ error: 'Route not found' });
+});
+
+// Error handling middleware (Must be last)
 app.use((err, req, res, next) => {
     console.error('Unhandled error:', err);
     res.status(500).json({ error: 'Internal server error' });
-});
-
-// 404 handler
-app.use('*', (req, res) => {
-    res.status(404).json({ error: 'Route not found' });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
