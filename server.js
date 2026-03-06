@@ -51,6 +51,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
             price REAL,
             description TEXT,
             seller_id INTEGER,
+            status TEXT DEFAULT 'available', -- 新增状态字段: available, sold, pending
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE SET NULL
@@ -110,9 +111,9 @@ const validateBookData = (req, res, next) => {
 
 // API Routes
 
-// 1. GET /api/books (List & Search)
+// 1. GET /api/books (List & Search) - Updated to filter by status
 app.get('/api/books', (req, res) => {
-    const { search, isbn, page = 1, limit = 20 } = req.query;
+    const { search, isbn, page = 1, limit = 20, status } = req.query;
     
     // Convert page and limit to integers with defaults
     const pageNum = Math.max(1, parseInt(page) || 1);
@@ -123,17 +124,29 @@ app.get('/api/books', (req, res) => {
     let countSql = 'SELECT COUNT(*) as total FROM books WHERE 1=1';
     let params = [];
 
+    // Add status filter (only show available books by default)
+    if (status && status !== 'all') {
+        sql += ' AND b.status = ?';
+        countSql += ' AND b.status = ?';
+        params.push(status);
+    } else {
+        // By default, only show available books
+        sql += ' AND b.status = ?';
+        countSql += ' AND b.status = ?';
+        params.push('available');
+    }
+
     // Add search conditions
     if (search && search.trim()) {
         sql += ' AND (b.title LIKE ? OR b.description LIKE ?)';
-        countSql += ' AND (title LIKE ? OR description LIKE ?)';
+        countSql += ' AND (b.title LIKE ? OR b.description LIKE ?)';
         const searchTerm = `%${search.trim()}%`;
         params.push(searchTerm, searchTerm);
     }
     
     if (isbn && isbn.trim()) {
         sql += ' AND b.isbn = ?';
-        countSql += ' AND isbn = ?';
+        countSql += ' AND b.isbn = ?';
         params.push(isbn.trim());
     }
     
@@ -229,8 +242,8 @@ app.post('/api/books', validateBookData, (req, res) => {
     
     function insertBook() {
         const sql = `
-            INSERT INTO books (title, isbn, price, description, seller_id) 
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO books (title, isbn, price, description, seller_id, status) 
+            VALUES (?, ?, ?, ?, ?, 'available')
         `;
         const params = [title.trim(), isbn.trim(), price, description, seller_id || null];
 
@@ -304,6 +317,42 @@ app.get('/api/users/:id', (req, res) => {
         }
         
         res.json({ data: row });
+    });
+});
+
+// 6. PUT /api/books/:id/status (Update book status)
+app.put('/api/books/:id/status', (req, res) => {
+    const { id } = req.params;
+    const { status } = req.body;
+    
+    // Validate ID
+    if (!id || isNaN(id) || parseInt(id) <= 0) {
+        return res.status(400).json({ error: 'Invalid book ID' });
+    }
+    
+    // Validate status
+    const validStatuses = ['available', 'sold', 'pending'];
+    if (!status || !validStatuses.includes(status)) {
+        return res.status(400).json({ error: 'Invalid status. Must be one of: available, sold, pending' });
+    }
+    
+    const sql = 'UPDATE books SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?';
+    
+    db.run(sql, [status, id], function(err) {
+        if (err) {
+            console.error('Database error updating book status:', err);
+            return res.status(500).json({ error: err.message });
+        }
+        
+        if (this.changes === 0) {
+            return res.status(404).json({ error: 'Book not found' });
+        }
+        
+        res.json({ 
+            message: 'Book status updated successfully',
+            bookId: parseInt(id),
+            newStatus: status
+        });
     });
 });
 
