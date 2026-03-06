@@ -15,8 +15,16 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// Debugging middleware for static files
+app.use('/public', (req, res, next) => {
+    console.log(`[Static Request] ${req.method} ${req.url}`);
+    next();
+});
+
 // Serve static files (like uploaded images or generated presets)
-app.use('/public', express.static(path.join(__dirname, 'public')));
+app.use('/public', express.static(path.join(__dirname, 'public'), {
+    fallthrough: false // This will force express.static to throw a 404 instead of passing to the next middleware if file not found
+}));
 
 // Rate limiting middleware (basic implementation)
 const requestCounts = {};
@@ -44,6 +52,7 @@ app.use((req, res, next) => {
 
 // Initialize SQLite Database
 const dbPath = path.resolve(__dirname, 'database.sqlite');
+console.log('Connecting to database at:', dbPath); // Add explicit logging for the user's VM
 const db = new sqlite3.Database(dbPath, (err) => {
     if (err) {
         console.error('Error opening database', err.message);
