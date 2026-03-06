@@ -7,10 +7,37 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
-app.use(cors());
+// Security middleware
+app.use(cors({
+    origin: '*', // In production, replace with specific domain
+    credentials: true
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// Rate limiting middleware (basic implementation)
+const requestCounts = {};
+const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const MAX_REQUESTS = 100; // Max requests per window
+
+app.use((req, res, next) => {
+    const clientIP = req.ip || req.connection.remoteAddress;
+    const now = Date.now();
+    
+    if (!requestCounts[clientIP]) {
+        requestCounts[clientIP] = [];
+    }
+    
+    // Clean old requests
+    requestCounts[clientIP] = requestCounts[clientIP].filter(time => now - time < WINDOW_MS);
+    
+    if (requestCounts[clientIP].length >= MAX_REQUESTS) {
+        return res.status(429).json({ error: 'Too many requests, please try again later.' });
+    }
+    
+    requestCounts[clientIP].push(now);
+    next();
+});
 
 // Initialize SQLite Database
 const dbPath = path.resolve(__dirname, 'database.sqlite');
@@ -104,7 +131,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
 
 // Validation middleware
 const validateBookData = (req, res, next) => {
-    const { title, author, isbn, price, original_price, condition, description, category } = req.body;
+    const { title, author, isbn, price, original_price, condition, description, category, image_urls } = req.body;
     
     // Basic validation
     if (!title || title.trim().length === 0) {
@@ -121,12 +148,12 @@ const validateBookData = (req, res, next) => {
     }
     
     // Validate price if provided
-    if (price !== undefined && (isNaN(price) || parseFloat(price) <= 0)) {
+    if (price !== undefined && (typeof price !== 'number' || price <= 0)) {
         return res.status(400).json({ error: 'Price must be a positive number' });
     }
     
     // Validate original_price if provided
-    if (original_price !== undefined && (isNaN(original_price) || parseFloat(original_price) <= 0)) {
+    if (original_price !== undefined && (typeof original_price !== 'number' || original_price <= 0)) {
         return res.status(400).json({ error: 'Original price must be a positive number' });
     }
     
@@ -145,7 +172,47 @@ const validateBookData = (req, res, next) => {
         return res.status(400).json({ error: 'Category name is too long (max 50 characters)' });
     }
     
+    // Validate image_urls if provided
+    if (image_urls) {
+        try {
+            // If it's a string, try to parse it as JSON array
+            if (typeof image_urls === 'string') {
+                const parsed = JSON.parse(image_urls);
+                if (!Array.isArray(parsed)) {
+                    return res.status(400).json({ error: 'Image URLs must be an array' });
+                }
+                // Validate each URL in the array
+                for (const url of parsed) {
+                    if (typeof url !== 'string' || !isValidUrl(url)) {
+                        return res.status(400).json({ error: 'All image URLs must be valid strings' });
+                    }
+                }
+            } else if (Array.isArray(image_urls)) {
+                // Validate each URL in the array
+                for (const url of image_urls) {
+                    if (typeof url !== 'string' || !isValidUrl(url)) {
+                        return res.status(400).json({ error: 'All image URLs must be valid strings' });
+                    }
+                }
+            } else {
+                return res.status(400).json({ error: 'Image URLs must be a string or array' });
+            }
+        } catch (e) {
+            return res.status(400).json({ error: 'Invalid image URLs format' });
+        }
+    }
+    
     next();
+};
+
+// Helper function to validate URL format
+const isValidUrl = (url) => {
+    try {
+        new URL(url);
+        return true;
+    } catch (e) {
+        return false;
+    }
 };
 
 // API Routes
@@ -278,7 +345,7 @@ app.get('/api/books/:id', (req, res) => {
     db.get(sql, [id], (err, row) => {
         if (err) {
             console.error('Database error:', err);
-            return res.status(500).json({ error: err.message });
+            return res.status(500).json({ error: 'Internal server error' });
         }
         
         if (!row) {
