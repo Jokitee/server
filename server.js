@@ -215,14 +215,14 @@ const validateBookData = (req, res, next) => {
         return res.status(400).json({ error: 'Invalid ISBN format' });
     }
 
-    // Validate price if provided
-    if (price !== undefined && (typeof price !== 'number' || price <= 0)) {
-        return res.status(400).json({ error: 'Price must be a positive number' });
+    // Validate price if provided (allow 0 for free books)
+    if (price !== undefined && price !== null && (typeof price !== 'number' || price < 0)) {
+        return res.status(400).json({ error: 'Price must be a non-negative number' });
     }
 
-    // Validate original_price if provided
-    if (original_price !== undefined && (typeof original_price !== 'number' || original_price <= 0)) {
-        return res.status(400).json({ error: 'Original price must be a positive number' });
+    // Validate original_price if provided (allow 0)
+    if (original_price !== undefined && original_price !== null && (typeof original_price !== 'number' || original_price < 0)) {
+        return res.status(400).json({ error: 'Original price must be a non-negative number' });
     }
 
     // Validate condition if provided
@@ -449,7 +449,7 @@ app.get('/api/books/:id', (req, res) => {
 app.post('/api/books', validateBookData, (req, res) => {
     const { title, author, isbn, price, original_price, condition, description, category, university, image_urls, seller_id } = req.body;
 
-    // If seller_id is provided, verify it exists
+    // If seller_id is provided, verify it exists; auto-create if missing
     if (seller_id) {
         db.get('SELECT id FROM users WHERE id = ?', [seller_id], (err, row) => {
             if (err) {
@@ -458,7 +458,24 @@ app.post('/api/books', validateBookData, (req, res) => {
             }
 
             if (!row) {
-                return res.status(400).json({ error: 'Seller does not exist' });
+                // Auto-create a default user so publishing always works
+                console.log(`[Auto] Creating default user with id hint ${seller_id}`);
+                db.run('INSERT OR IGNORE INTO users (username, university) VALUES (?, ?)',
+                    [`校友_${seller_id}`, university || null],
+                    function (createErr) {
+                        if (createErr) {
+                            console.error('Error auto-creating user:', createErr);
+                            // Still proceed without seller_id
+                            insertBook();
+                        } else {
+                            console.log(`[Auto] Default user created with id: ${this.lastID}`);
+                            // Use the actual new user id
+                            req.body.seller_id = this.lastID;
+                            insertBook();
+                        }
+                    }
+                );
+                return;
             }
 
             // Proceed with inserting the book
