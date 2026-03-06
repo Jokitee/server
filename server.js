@@ -200,15 +200,18 @@ const validateBookData = (req, res, next) => {
 
     // Basic validation
     if (!title || title.trim().length === 0) {
+        console.log('[Validate Error] Title is required');
         return res.status(400).json({ error: 'Title is required' });
     }
 
     if (!isbn || isbn.trim().length === 0) {
+        console.log('[Validate Error] ISBN is required');
         return res.status(400).json({ error: 'ISBN is required' });
     }
 
     // Validate ISBN format (basic check)
     if (!/^\d{10,13}$/.test(isbn.replace(/[-\s]/g, ''))) {
+        console.log('[Validate Error] Invalid ISBN format:', isbn);
         return res.status(400).json({ error: 'Invalid ISBN format' });
     }
 
@@ -244,11 +247,13 @@ const validateBookData = (req, res, next) => {
             if (typeof image_urls === 'string') {
                 const parsed = JSON.parse(image_urls);
                 if (!Array.isArray(parsed)) {
+                    console.log('[Validate Error] Image URLs string is not an array format');
                     return res.status(400).json({ error: 'Image URLs must be an array' });
                 }
                 // Validate each URL in the array
                 for (const url of parsed) {
                     if (typeof url !== 'string' || !isValidUrl(url)) {
+                        console.log('[Validate Error] Invalid URL in parsed array:', url);
                         return res.status(400).json({ error: 'All image URLs must be valid strings' });
                     }
                 }
@@ -256,13 +261,16 @@ const validateBookData = (req, res, next) => {
                 // Validate each URL in the array
                 for (const url of image_urls) {
                     if (typeof url !== 'string' || !isValidUrl(url)) {
+                        console.log('[Validate Error] Invalid URL in raw array:', url);
                         return res.status(400).json({ error: 'All image URLs must be valid strings' });
                     }
                 }
             } else {
+                console.log('[Validate Error] Image URLs is neither string nor array:', typeof image_urls);
                 return res.status(400).json({ error: 'Image URLs must be a string or array' });
             }
         } catch (e) {
+            console.log('[Validate Error] Invalid image URLs JSON format:', e.message);
             return res.status(400).json({ error: 'Invalid image URLs format' });
         }
     }
