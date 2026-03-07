@@ -377,10 +377,10 @@ app.get('/api/books', (req, res) => {
                      LEFT JOIN users u ON b.seller_id = u.id
                      ${whereStr}
                      ORDER BY b.${sortByColumn} ${orderDirection}
-                     LIMIT ? OFFSET ?`;
+                     LIMIT ${limitNum} OFFSET ${offset}`;
 
-    // Count query uses whereParams, data query appends limit/offset
-    const dataParams = [...whereParams, limitNum, offset];
+    // Count query uses whereParams, data query also uses whereParams as limit/offset are interpolated
+    const dataParams = whereParams;
 
     db.serialize(() => {
         db.get(countSql, whereParams, (err, countRow) => {
