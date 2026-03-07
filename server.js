@@ -3,11 +3,15 @@ const sqlite3 = require('sqlite3').verbose();
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const multer = require('multer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Security middleware
+// ============================================================
+// Middleware
+// ============================================================
+
 app.use(cors({
     origin: '*', // In production, replace with specific domain
     credentials: true
@@ -15,24 +19,37 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Debugging middleware for static files
+// Conditional debug logging for static file requests
 app.use((req, res, next) => {
-    if (req.url.startsWith('/public/')) {
+    if (process.env.DEBUG && req.url.startsWith('/public/')) {
         console.log(`[Static Request] ${req.method} ${req.url}`);
     }
     next();
 });
 
-// Serve static files (like uploaded images or generated presets). 
-// Remove the '/public' prefix aliasing to ensure the physical path perfectly matches the URL path
+// Serve static files
 app.use('/public', express.static(path.join(__dirname, 'public'), {
     fallthrough: false
 }));
 
-// Rate limiting middleware (basic implementation)
+// ============================================================
+// Rate Limiting (basic in-memory implementation)
+// ============================================================
+
 const requestCounts = {};
 const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
-const MAX_REQUESTS = 100; // Max requests per window
+const MAX_REQUESTS = 100;
+
+// Periodic cleanup to prevent memory leak
+setInterval(() => {
+    const now = Date.now();
+    for (const ip in requestCounts) {
+        requestCounts[ip] = requestCounts[ip].filter(time => now - time < WINDOW_MS);
+        if (requestCounts[ip].length === 0) {
+            delete requestCounts[ip];
+        }
+    }
+}, WINDOW_MS);
 
 app.use((req, res, next) => {
     const clientIP = req.ip || req.connection.remoteAddress;
@@ -42,7 +59,6 @@ app.use((req, res, next) => {
         requestCounts[clientIP] = [];
     }
 
-    // Clean old requests
     requestCounts[clientIP] = requestCounts[clientIP].filter(time => now - time < WINDOW_MS);
 
     if (requestCounts[clientIP].length >= MAX_REQUESTS) {
@@ -53,23 +69,25 @@ app.use((req, res, next) => {
     next();
 });
 
-// Initialize SQLite Database
+// ============================================================
+// Database Initialization
+// ============================================================
+
 const dbPath = path.resolve(__dirname, 'database.sqlite');
-console.log('Connecting to database at:', dbPath); // Add explicit logging for the user's VM
+console.log('Connecting to database at:', dbPath);
+
 const db = new sqlite3.Database(dbPath, (err) => {
     if (err) {
         console.error('Error opening database', err.message);
-    } else {
-        console.log('Connected to the SQLite database.');
+        return;
+    }
 
+    console.log('Connected to the SQLite database.');
+
+    // Use serialize to guarantee execution order for all init statements
+    db.serialize(() => {
         // Enable foreign keys
-        db.run('PRAGMA foreign_keys = ON;', (err) => {
-            if (err) {
-                console.error('Error enabling foreign keys:', err.message);
-            } else {
-                console.log('Foreign keys enabled');
-            }
-        });
+        db.run('PRAGMA foreign_keys = ON;');
 
         // Create Users Table
         db.run(`CREATE TABLE IF NOT EXISTS users (
@@ -82,13 +100,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
             university TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )`, (err) => {
-            if (err) {
-                console.error('Error creating users table:', err.message);
-            } else {
-                console.log('Users table ready');
-            }
-        });
+        )`);
 
         // Create Books Table
         db.run(`CREATE TABLE IF NOT EXISTS books (
@@ -102,52 +114,25 @@ const db = new sqlite3.Database(dbPath, (err) => {
             description TEXT,
             category TEXT,
             university TEXT,
-            image_urls TEXT, -- JSON array of image URLs
+            image_urls TEXT,
             seller_id INTEGER,
             buyer_id INTEGER,
-            status TEXT DEFAULT 'available' CHECK(status IN ('available', 'reserved', 'sold', 'inactive')), -- 更精确的状态定义
+            status TEXT DEFAULT 'available' CHECK(status IN ('available', 'reserved', 'sold', 'inactive')),
             views_count INTEGER DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE SET NULL,
             FOREIGN KEY (buyer_id) REFERENCES users(id) ON DELETE SET NULL
-        )`, (err) => {
-            if (err) {
-                console.error('Error creating books table:', err.message);
-            } else {
-                console.log('Books table ready');
+        )`);
 
-                // Create indexes for better performance
-                db.run('CREATE INDEX IF NOT EXISTS idx_books_title ON books(title)', (err) => {
-                    if (err) console.error('Error creating title index:', err.message);
-                });
-
-                db.run('CREATE INDEX IF NOT EXISTS idx_books_isbn ON books(isbn)', (err) => {
-                    if (err) console.error('Error creating isbn index:', err.message);
-                });
-
-                db.run('CREATE INDEX IF NOT EXISTS idx_books_status ON books(status)', (err) => {
-                    if (err) console.error('Error creating status index:', err.message);
-                });
-
-                db.run('CREATE INDEX IF NOT EXISTS idx_books_category ON books(category)', (err) => {
-                    if (err) console.error('Error creating category index:', err.message);
-                });
-
-                db.run('CREATE INDEX IF NOT EXISTS idx_books_seller_id ON books(seller_id)', (err) => {
-                    if (err) console.error('Error creating seller_id index:', err.message);
-                });
-
-                db.run('CREATE INDEX IF NOT EXISTS idx_books_created_at ON books(created_at)', (err) => {
-                    if (err) console.error('Error creating date index:', err.message);
-                });
-
-                // In a production environment with existing data, this would need an ALTER TABLE
-                // db.run('CREATE INDEX IF NOT EXISTS idx_books_university ON books(university)', (err) => {
-                //     if (err) console.error('Error creating university index:', err.message);
-                // });
-            }
-        });
+        // Create indexes for books
+        db.run('CREATE INDEX IF NOT EXISTS idx_books_title ON books(title)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_books_isbn ON books(isbn)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_books_status ON books(status)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_books_category ON books(category)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_books_seller_id ON books(seller_id)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_books_created_at ON books(created_at)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_books_university ON books(university)');
 
         // Create Messages Table
         db.run(`CREATE TABLE IF NOT EXISTS messages (
@@ -161,18 +146,14 @@ const db = new sqlite3.Database(dbPath, (err) => {
             FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE SET NULL
-        )`, (err) => {
-            if (err) {
-                console.error('Error creating messages table:', err.message);
-            } else {
-                console.log('Messages table ready');
-                db.run('CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id)');
-                db.run('CREATE INDEX IF NOT EXISTS idx_messages_receiver ON messages(receiver_id)');
-                db.run('CREATE INDEX IF NOT EXISTS idx_messages_book ON messages(book_id)');
-            }
-        });
+        )`);
 
-        // Perform safe schema migrations for existing databases
+        // Create indexes for messages
+        db.run('CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_messages_receiver ON messages(receiver_id)');
+        db.run('CREATE INDEX IF NOT EXISTS idx_messages_book ON messages(book_id)');
+
+        // Safe schema migrations for existing databases
         const migrations = [
             "ALTER TABLE users ADD COLUMN avatar_url TEXT;",
             "ALTER TABLE users ADD COLUMN university TEXT;",
@@ -181,104 +162,50 @@ const db = new sqlite3.Database(dbPath, (err) => {
 
         migrations.forEach(sql => {
             db.run(sql, (err) => {
-                if (err) {
-                    // Ignore "duplicate column name" errors which mean that the column already exists
-                    if (!err.message.includes('duplicate column name')) {
-                        console.error(`Migration error (${sql}):`, err.message);
-                    }
-                } else {
-                    console.log(`Migration successful: ${sql}`);
+                if (err && !err.message.includes('duplicate column name')) {
+                    console.error(`Migration error (${sql}):`, err.message);
                 }
             });
         });
+
+        console.log('Database initialization complete.');
+    });
+});
+
+// ============================================================
+// File Upload Configuration (multer)
+// ============================================================
+
+const uploadDir = path.join(__dirname, 'public', 'uploads');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, uploadDir),
+    filename: (req, file, cb) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        const ext = path.extname(file.originalname);
+        cb(null, `${uniqueSuffix}${ext}`);
     }
 });
 
-// Validation middleware
-const validateBookData = (req, res, next) => {
-    const { title, author, isbn, price, original_price, condition, description, category, image_urls } = req.body;
-
-    // Basic validation
-    if (!title || title.trim().length === 0) {
-        console.log('[Validate Error] Title is required');
-        return res.status(400).json({ error: 'Title is required' });
-    }
-
-    if (!isbn || isbn.trim().length === 0) {
-        console.log('[Validate Error] ISBN is required');
-        return res.status(400).json({ error: 'ISBN is required' });
-    }
-
-    // Validate ISBN format (basic check)
-    if (!/^\d{10,13}$/.test(isbn.replace(/[-\s]/g, ''))) {
-        console.log('[Validate Error] Invalid ISBN format:', isbn);
-        return res.status(400).json({ error: 'Invalid ISBN format' });
-    }
-
-    // Validate price if provided (allow 0 for free books)
-    if (price !== undefined && price !== null && (typeof price !== 'number' || price < 0)) {
-        return res.status(400).json({ error: 'Price must be a non-negative number' });
-    }
-
-    // Validate original_price if provided (allow 0)
-    if (original_price !== undefined && original_price !== null && (typeof original_price !== 'number' || original_price < 0)) {
-        return res.status(400).json({ error: 'Original price must be a non-negative number' });
-    }
-
-    // Validate condition if provided
-    if (condition && !['new', 'like_new', 'good', 'fair', 'poor'].includes(condition)) {
-        return res.status(400).json({ error: 'Condition must be one of: new, like_new, good, fair, poor' });
-    }
-
-    // Validate description length if provided
-    if (description && description.length > 2000) {
-        return res.status(400).json({ error: 'Description is too long (max 2000 characters)' });
-    }
-
-    // Validate category if provided
-    if (category && category.length > 50) {
-        return res.status(400).json({ error: 'Category name is too long (max 50 characters)' });
-    }
-
-    // Validate image_urls if provided
-    if (image_urls) {
-        try {
-            // If it's a string, try to parse it as JSON array
-            if (typeof image_urls === 'string') {
-                const parsed = JSON.parse(image_urls);
-                if (!Array.isArray(parsed)) {
-                    console.log('[Validate Error] Image URLs string is not an array format');
-                    return res.status(400).json({ error: 'Image URLs must be an array' });
-                }
-                // Validate each URL in the array
-                for (const url of parsed) {
-                    if (typeof url !== 'string' || !isValidUrl(url)) {
-                        console.log('[Validate Error] Invalid URL in parsed array:', url);
-                        return res.status(400).json({ error: 'All image URLs must be valid strings' });
-                    }
-                }
-            } else if (Array.isArray(image_urls)) {
-                // Validate each URL in the array
-                for (const url of image_urls) {
-                    if (typeof url !== 'string' || !isValidUrl(url)) {
-                        console.log('[Validate Error] Invalid URL in raw array:', url);
-                        return res.status(400).json({ error: 'All image URLs must be valid strings' });
-                    }
-                }
-            } else {
-                console.log('[Validate Error] Image URLs is neither string nor array:', typeof image_urls);
-                return res.status(400).json({ error: 'Image URLs must be a string or array' });
-            }
-        } catch (e) {
-            console.log('[Validate Error] Invalid image URLs JSON format:', e.message);
-            return res.status(400).json({ error: 'Invalid image URLs format' });
+const upload = multer({
+    storage,
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only image files are allowed'));
         }
     }
+});
 
-    next();
-};
+// ============================================================
+// Validation Helpers
+// ============================================================
 
-// Helper function to validate URL format, allowing WeChat local/temp protocols
 const isValidUrl = (url) => {
     try {
         if (url.startsWith('wxfile://') || url.startsWith('http://tmp/')) {
@@ -291,115 +218,191 @@ const isValidUrl = (url) => {
     }
 };
 
-// API Routes
+const validateBookData = (req, res, next) => {
+    const { title, author, isbn, price, original_price, condition, description, category, image_urls } = req.body;
 
-// 1. GET /api/books (List & Search) - Updated to filter by status, category, condition, and university
+    if (!title || title.trim().length === 0) {
+        return res.status(400).json({ error: 'Title is required' });
+    }
+
+    if (!isbn || isbn.trim().length === 0) {
+        return res.status(400).json({ error: 'ISBN is required' });
+    }
+
+    if (!/^\d{10,13}$/.test(isbn.replace(/[-\s]/g, ''))) {
+        return res.status(400).json({ error: 'Invalid ISBN format' });
+    }
+
+    if (price !== undefined && price !== null && (typeof price !== 'number' || price < 0)) {
+        return res.status(400).json({ error: 'Price must be a non-negative number' });
+    }
+
+    if (original_price !== undefined && original_price !== null && (typeof original_price !== 'number' || original_price < 0)) {
+        return res.status(400).json({ error: 'Original price must be a non-negative number' });
+    }
+
+    if (condition && !['new', 'like_new', 'good', 'fair', 'poor'].includes(condition)) {
+        return res.status(400).json({ error: 'Condition must be one of: new, like_new, good, fair, poor' });
+    }
+
+    if (description && description.length > 2000) {
+        return res.status(400).json({ error: 'Description is too long (max 2000 characters)' });
+    }
+
+    if (category && category.length > 50) {
+        return res.status(400).json({ error: 'Category name is too long (max 50 characters)' });
+    }
+
+    if (image_urls) {
+        try {
+            if (typeof image_urls === 'string') {
+                const parsed = JSON.parse(image_urls);
+                if (!Array.isArray(parsed)) {
+                    return res.status(400).json({ error: 'Image URLs must be an array' });
+                }
+                for (const url of parsed) {
+                    if (typeof url !== 'string' || !isValidUrl(url)) {
+                        return res.status(400).json({ error: 'All image URLs must be valid strings' });
+                    }
+                }
+            } else if (Array.isArray(image_urls)) {
+                for (const url of image_urls) {
+                    if (typeof url !== 'string' || !isValidUrl(url)) {
+                        return res.status(400).json({ error: 'All image URLs must be valid strings' });
+                    }
+                }
+            } else {
+                return res.status(400).json({ error: 'Image URLs must be a string or array' });
+            }
+        } catch (e) {
+            return res.status(400).json({ error: 'Invalid image URLs format' });
+        }
+    }
+
+    next();
+};
+
+// ============================================================
+// API Routes
+// ============================================================
+
+// --- File Upload ---
+app.post('/api/upload', upload.single('image'), (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ error: 'No image file provided' });
+    }
+
+    const imageUrl = `${req.protocol}://${req.get('host')}/public/uploads/${req.file.filename}`;
+    res.json({
+        url: imageUrl,
+        filename: req.file.filename
+    });
+});
+
+// --- Books ---
+
+// 1. GET /api/books (List & Search)
 app.get('/api/books', (req, res) => {
     const { search, isbn, page = 1, limit = 20, status, category, condition, university, min_price, max_price, sort_by = 'created_at', order = 'desc' } = req.query;
 
-    // Convert page and limit to integers with defaults
     const pageNum = Math.max(1, parseInt(page) || 1);
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 20)); // Max 100 per page
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 20));
     const offset = (pageNum - 1) * limitNum;
 
-    let sql = `SELECT b.*, u.username as seller_name, u.avatar_url as seller_avatar
-               FROM books b 
-               LEFT JOIN users u ON b.seller_id = u.id 
-               WHERE 1=1`;
-    let countSql = 'SELECT COUNT(*) as total FROM books b WHERE 1=1';
-    let params = [];
+    // Use separate param arrays for data query and count query to avoid slice bugs
+    let whereClauses = [];
+    let whereParams = [];
 
-    // Add status filter (only show available books by default)
+    // Status filter (default: available)
     if (status && status !== 'all') {
-        sql += ' AND b.status = ?';
-        countSql += ' AND b.status = ?';
-        params.push(status);
+        whereClauses.push('b.status = ?');
+        whereParams.push(status);
     } else {
-        // By default, only show available books
-        sql += ' AND b.status = ?';
-        countSql += ' AND b.status = ?';
-        params.push('available');
+        whereClauses.push('b.status = ?');
+        whereParams.push('available');
     }
 
-    // Add university filter
+    // University filter
     if (university && university.trim() && university !== '全部大学') {
-        sql += ' AND b.university = ?';
-        countSql += ' AND b.university = ?';
-        params.push(university.trim());
+        whereClauses.push('b.university = ?');
+        whereParams.push(university.trim());
     }
 
-    // Add category filter
+    // Category filter
     if (category && category.trim()) {
-        sql += ' AND b.category = ?';
-        countSql += ' AND b.category = ?';
-        params.push(category.trim());
+        whereClauses.push('b.category = ?');
+        whereParams.push(category.trim());
     }
 
-    // Add condition filter
+    // Condition filter
     if (condition && condition.trim()) {
-        sql += ' AND b.condition = ?';
-        countSql += ' AND b.condition = ?';
-        params.push(condition.trim());
+        whereClauses.push('b.condition = ?');
+        whereParams.push(condition.trim());
     }
 
-    // Add price range filters
+    // Price range filters
     if (min_price !== undefined && !isNaN(parseFloat(min_price))) {
-        sql += ' AND b.price >= ?';
-        countSql += ' AND b.price >= ?';
-        params.push(parseFloat(min_price));
+        whereClauses.push('b.price >= ?');
+        whereParams.push(parseFloat(min_price));
     }
     if (max_price !== undefined && !isNaN(parseFloat(max_price))) {
-        sql += ' AND b.price <= ?';
-        countSql += ' AND b.price <= ?';
-        params.push(parseFloat(max_price));
+        whereClauses.push('b.price <= ?');
+        whereParams.push(parseFloat(max_price));
     }
 
-    // Add search conditions
+    // Search conditions
     if (search && search.trim()) {
-        sql += ' AND (b.title LIKE ? OR b.author LIKE ? OR b.description LIKE ?)';
-        countSql += ' AND (b.title LIKE ? OR b.author LIKE ? OR b.description LIKE ?)';
+        whereClauses.push('(b.title LIKE ? OR b.author LIKE ? OR b.description LIKE ?)');
         const searchTerm = `%${search.trim()}%`;
-        params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+        whereParams.push(searchTerm, searchTerm, searchTerm);
     }
 
+    // ISBN exact match
     if (isbn && isbn.trim()) {
-        sql += ' AND b.isbn = ?';
-        countSql += ' AND b.isbn = ?';
-        params.push(isbn.trim());
+        whereClauses.push('b.isbn = ?');
+        whereParams.push(isbn.trim());
     }
 
-    // Add sorting
+    const whereStr = whereClauses.length > 0 ? 'WHERE ' + whereClauses.join(' AND ') : '';
+
+    // Sorting
     const validSortColumns = ['created_at', 'updated_at', 'price', 'views_count', 'title'];
     const validOrderDirections = ['asc', 'desc'];
     const sortByColumn = validSortColumns.includes(sort_by) ? sort_by : 'created_at';
     const orderDirection = validOrderDirections.includes(order.toLowerCase()) ? order.toUpperCase() : 'DESC';
-    sql += ` ORDER BY b.${sortByColumn} ${orderDirection} LIMIT ? OFFSET ?`;
-    params.push(limitNum, offset);
 
-    // Execute both queries in parallel
+    const countSql = `SELECT COUNT(*) as total FROM books b ${whereStr}`;
+    const dataSql = `SELECT b.*, u.username as seller_name, u.avatar_url as seller_avatar
+                     FROM books b
+                     LEFT JOIN users u ON b.seller_id = u.id
+                     ${whereStr}
+                     ORDER BY b.${sortByColumn} ${orderDirection}
+                     LIMIT ? OFFSET ?`;
+
+    // Count query uses whereParams, data query appends limit/offset
+    const dataParams = [...whereParams, limitNum, offset];
+
     db.serialize(() => {
-        // Get total count
-        db.get(countSql, params.slice(0, -2), (err, countRow) => {
+        db.get(countSql, whereParams, (err, countRow) => {
             if (err) {
                 console.error('Database error in count query:', err);
-                return res.status(500).json({ error: err.message });
+                return res.status(500).json({ error: 'Internal server error' });
             }
 
             const total = countRow ? countRow.total : 0;
             const totalPages = Math.ceil(total / limitNum);
 
-            // Get actual data
-            db.all(sql, params, (err, rows) => {
+            db.all(dataSql, dataParams, (err, rows) => {
                 if (err) {
                     console.error('Database error in data query:', err);
-                    return res.status(500).json({ error: err.message });
+                    return res.status(500).json({ error: 'Internal server error' });
                 }
 
                 res.json({
                     data: rows,
                     pagination: {
                         currentPage: pageNum,
-                        totalPages: totalPages,
+                        totalPages,
                         totalItems: total,
                         itemsPerPage: limitNum
                     }
@@ -413,15 +416,14 @@ app.get('/api/books', (req, res) => {
 app.get('/api/books/:id', (req, res) => {
     const { id } = req.params;
 
-    // Validate ID
     if (!id || isNaN(id) || parseInt(id) <= 0) {
         return res.status(400).json({ error: 'Invalid book ID' });
     }
 
     const sql = `
         SELECT b.*, u.username as seller_name, u.contact_info as seller_contact, u.email as seller_email, u.phone as seller_phone
-        FROM books b 
-        LEFT JOIN users u ON b.seller_id = u.id 
+        FROM books b
+        LEFT JOIN users u ON b.seller_id = u.id
         WHERE b.id = ?
     `;
 
@@ -436,12 +438,8 @@ app.get('/api/books/:id', (req, res) => {
         }
 
         // Increment views count
-        db.run('UPDATE books SET views_count = views_count + 1 WHERE id = ?', [id], (updateErr) => {
-            if (updateErr) {
-                console.error('Error updating views count:', updateErr);
-            }
-            res.json({ data: row });
-        });
+        db.run('UPDATE books SET views_count = views_count + 1 WHERE id = ?', [id]);
+        res.json({ data: row });
     });
 });
 
@@ -449,46 +447,37 @@ app.get('/api/books/:id', (req, res) => {
 app.post('/api/books', validateBookData, (req, res) => {
     const { title, author, isbn, price, original_price, condition, description, category, university, image_urls, seller_id } = req.body;
 
-    // If seller_id is provided, verify it exists; auto-create if missing
     if (seller_id) {
         db.get('SELECT id FROM users WHERE id = ?', [seller_id], (err, row) => {
             if (err) {
                 console.error('Database error checking seller:', err);
-                return res.status(500).json({ error: err.message });
+                return res.status(500).json({ error: 'Internal server error' });
             }
 
             if (!row) {
                 // Auto-create a default user so publishing always works
-                console.log(`[Auto] Creating default user with id hint ${seller_id}`);
                 db.run('INSERT OR IGNORE INTO users (username, university) VALUES (?, ?)',
                     [`校友_${seller_id}`, university || null],
                     function (createErr) {
                         if (createErr) {
                             console.error('Error auto-creating user:', createErr);
-                            // Still proceed without seller_id
-                            insertBook();
-                        } else {
-                            console.log(`[Auto] Default user created with id: ${this.lastID}`);
-                            // Use the actual new user id
-                            req.body.seller_id = this.lastID;
-                            insertBook();
                         }
+                        req.body.seller_id = this.lastID || seller_id;
+                        insertBook();
                     }
                 );
                 return;
             }
 
-            // Proceed with inserting the book
             insertBook();
         });
     } else {
-        // No seller verification needed
         insertBook();
     }
 
     function insertBook() {
         const sql = `
-            INSERT INTO books (title, author, isbn, price, original_price, condition, description, category, university, image_urls, seller_id, status) 
+            INSERT INTO books (title, author, isbn, price, original_price, condition, description, category, university, image_urls, seller_id, status)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available')
         `;
         const params = [
@@ -502,19 +491,16 @@ app.post('/api/books', validateBookData, (req, res) => {
             category || null,
             university || null,
             image_urls || null,
-            seller_id || null
+            req.body.seller_id || null
         ];
 
         db.run(sql, params, function (err) {
             if (err) {
                 console.error('Database error inserting book:', err);
-
-                // Check if it's a duplicate ISBN error
                 if (err.message.includes('UNIQUE constraint failed')) {
                     return res.status(400).json({ error: 'A book with this ISBN already exists' });
                 }
-
-                return res.status(500).json({ error: err.message });
+                return res.status(500).json({ error: 'Internal server error' });
             }
 
             res.status(201).json({
@@ -525,6 +511,8 @@ app.post('/api/books', validateBookData, (req, res) => {
     }
 });
 
+// --- Users ---
+
 // 4. POST /api/users (Create a new user)
 app.post('/api/users', (req, res) => {
     const { username, contact_info, email, phone, avatar_url, university } = req.body;
@@ -533,12 +521,10 @@ app.post('/api/users', (req, res) => {
         return res.status(400).json({ error: 'Username is required' });
     }
 
-    // Validate email if provided
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         return res.status(400).json({ error: 'Invalid email format' });
     }
 
-    // Validate phone if provided
     if (phone && !/^[\+]?[1-9][\d]{0,15}$/.test(phone.replace(/[-\s\(\)]/g, ''))) {
         return res.status(400).json({ error: 'Invalid phone number format' });
     }
@@ -549,12 +535,10 @@ app.post('/api/users', (req, res) => {
     db.run(sql, params, function (err) {
         if (err) {
             console.error('Database error inserting user:', err);
-
             if (err.message.includes('UNIQUE constraint failed')) {
                 return res.status(400).json({ error: 'Username already exists' });
             }
-
-            return res.status(500).json({ error: err.message });
+            return res.status(500).json({ error: 'Internal server error' });
         }
 
         res.status(201).json({
@@ -572,12 +556,12 @@ app.get('/api/users/:id', (req, res) => {
         return res.status(400).json({ error: 'Invalid user ID' });
     }
 
-    const sql = 'SELECT id, username, contact_info, email, phone, avatar_url, created_at, updated_at FROM users WHERE id = ?';
+    const sql = 'SELECT id, username, contact_info, email, phone, avatar_url, university, created_at, updated_at FROM users WHERE id = ?';
 
     db.get(sql, [id], (err, row) => {
         if (err) {
             console.error('Database error:', err);
-            return res.status(500).json({ error: err.message });
+            return res.status(500).json({ error: 'Internal server error' });
         }
 
         if (!row) {
@@ -588,17 +572,17 @@ app.get('/api/users/:id', (req, res) => {
     });
 });
 
+// --- Book Status ---
+
 // 6. PUT /api/books/:id/status (Update book status)
 app.put('/api/books/:id/status', (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
 
-    // Validate ID
     if (!id || isNaN(id) || parseInt(id) <= 0) {
         return res.status(400).json({ error: 'Invalid book ID' });
     }
 
-    // Validate status - use the same values as defined in the table schema
     const validStatuses = ['available', 'reserved', 'sold', 'inactive'];
     if (!status || !validStatuses.includes(status)) {
         return res.status(400).json({ error: 'Invalid status. Must be one of: available, reserved, sold, inactive' });
@@ -609,7 +593,7 @@ app.put('/api/books/:id/status', (req, res) => {
     db.run(sql, [status, id], function (err) {
         if (err) {
             console.error('Database error updating book status:', err);
-            return res.status(500).json({ error: err.message });
+            return res.status(500).json({ error: 'Internal server error' });
         }
 
         if (this.changes === 0) {
@@ -624,6 +608,8 @@ app.put('/api/books/:id/status', (req, res) => {
     });
 });
 
+// --- Messages ---
+
 // 7. GET /api/messages/:userId (Get latest conversations for user)
 app.get('/api/messages/:userId', (req, res) => {
     const { userId } = req.params;
@@ -632,9 +618,8 @@ app.get('/api/messages/:userId', (req, res) => {
         return res.status(400).json({ error: 'Invalid user ID' });
     }
 
-    // Get the most recent message per conversation partner
     const sql = `
-        SELECT m1.*, 
+        SELECT m1.*,
                CASE WHEN m1.sender_id = ? THEN u_receiver.username ELSE u_sender.username END as other_user_name,
                CASE WHEN m1.sender_id = ? THEN u_receiver.avatar_url ELSE u_sender.avatar_url END as other_user_avatar,
                CASE WHEN m1.sender_id = ? THEN m1.receiver_id ELSE m1.sender_id END as other_user_id
@@ -653,7 +638,7 @@ app.get('/api/messages/:userId', (req, res) => {
     db.all(sql, [userId, userId, userId, userId, userId], (err, rows) => {
         if (err) {
             console.error('Database error checking messages:', err);
-            return res.status(500).json({ error: err.message });
+            return res.status(500).json({ error: 'Internal server error' });
         }
         res.json({ data: rows });
     });
@@ -678,11 +663,11 @@ app.get('/api/messages/session/:userId/:otherUserId', (req, res) => {
     db.all(sql, [userId, otherUserId, otherUserId, userId], (err, rows) => {
         if (err) {
             console.error('Database error fetching session:', err);
-            return res.status(500).json({ error: err.message });
+            return res.status(500).json({ error: 'Internal server error' });
         }
 
-        // Mark as read if receiver_id is userId
-        db.run(`UPDATE messages SET is_read = 1 WHERE receiver_id = ? AND sender_id = ? AND is_read = 0`,
+        // Mark as read
+        db.run('UPDATE messages SET is_read = 1 WHERE receiver_id = ? AND sender_id = ? AND is_read = 0',
             [userId, otherUserId]);
 
         res.json({ data: rows });
@@ -697,61 +682,126 @@ app.post('/api/messages', (req, res) => {
         return res.status(400).json({ error: 'Sender, receiver, and content are required' });
     }
 
-    const sql = `INSERT INTO messages (sender_id, receiver_id, book_id, content) VALUES (?, ?, ?, ?)`;
-    const params = [sender_id, receiver_id, book_id || null, content.trim()];
-
-    db.run(sql, params, function (err) {
+    // Validate that both users exist
+    db.get('SELECT id FROM users WHERE id = ?', [sender_id], (err, senderRow) => {
         if (err) {
-            console.error('Database error inserting message:', err);
-            return res.status(500).json({ error: err.message });
+            console.error('Database error checking sender:', err);
+            return res.status(500).json({ error: 'Internal server error' });
         }
-        res.status(201).json({ message: 'Message sent', messageId: this.lastID });
+        if (!senderRow) {
+            return res.status(400).json({ error: 'Sender user not found' });
+        }
+
+        db.get('SELECT id FROM users WHERE id = ?', [receiver_id], (err, receiverRow) => {
+            if (err) {
+                console.error('Database error checking receiver:', err);
+                return res.status(500).json({ error: 'Internal server error' });
+            }
+            if (!receiverRow) {
+                return res.status(400).json({ error: 'Receiver user not found' });
+            }
+
+            const sql = 'INSERT INTO messages (sender_id, receiver_id, book_id, content) VALUES (?, ?, ?, ?)';
+            const params = [sender_id, receiver_id, book_id || null, content.trim()];
+
+            db.run(sql, params, function (err) {
+                if (err) {
+                    console.error('Database error inserting message:', err);
+                    return res.status(500).json({ error: 'Internal server error' });
+                }
+                res.status(201).json({ message: 'Message sent', messageId: this.lastID });
+            });
+        });
     });
 });
 
-// Health check endpoint
+// ============================================================
+// Utility Routes
+// ============================================================
+
+// Health check
 app.get('/health', (req, res) => {
     res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-// Default route
+// Default route — API documentation
 app.get('/', (req, res) => {
     res.json({
         message: 'Second-hand Book Market API is running',
-        version: '1.0.0',
+        version: '1.1.0',
         endpoints: {
-            'GET /api/books': 'Get all books with optional search',
-            'GET /api/books/:id': 'Get a specific book',
-            'POST /api/books': 'Create a new book listing',
-            'POST /api/users': 'Create a new user',
-            'GET /api/users/:id': 'Get user info',
-            'GET /health': 'Health check'
+            'GET    /api/books': 'List books with search, filter & pagination',
+            'GET    /api/books/:id': 'Get book detail',
+            'POST   /api/books': 'Create a new book listing',
+            'PUT    /api/books/:id/status': 'Update book status',
+            'POST   /api/upload': 'Upload an image file',
+            'POST   /api/users': 'Create a new user',
+            'GET    /api/users/:id': 'Get user info',
+            'GET    /api/messages/:userId': 'Get conversations',
+            'GET    /api/messages/session/:uid1/:uid2': 'Get chat history',
+            'POST   /api/messages': 'Send a message',
+            'GET    /health': 'Health check'
         }
     });
 });
 
-// 404 handler (Catch-all for unhandled routes)
+// 404 handler
 app.use((req, res, next) => {
     res.status(404).json({ error: 'Route not found' });
 });
 
-// Error handling middleware (Must be last)
+// Global error handler (must be last)
 app.use((err, req, res, next) => {
+    // Handle multer errors gracefully
+    if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(400).json({ error: 'File too large (max 5MB)' });
+        }
+        return res.status(400).json({ error: err.message });
+    }
     console.error('Unhandled error:', err);
     res.status(500).json({ error: 'Internal server error' });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
+// ============================================================
+// Server Start & Graceful Shutdown
+// ============================================================
 
-    // Log API endpoints for reference
+const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server is running on http://localhost:${PORT}`);
     console.log('\nAvailable endpoints:');
-    console.log('  GET    /api/books          - Get all books with optional search');
+    console.log('  GET    /api/books          - List books with search & filter');
     console.log('  GET    /api/books/:id      - Get a specific book');
     console.log('  POST   /api/books          - Create a new book listing');
+    console.log('  PUT    /api/books/:id/status - Update book status');
+    console.log('  POST   /api/upload         - Upload an image');
     console.log('  POST   /api/users          - Create a new user');
     console.log('  GET    /api/users/:id      - Get user info');
+    console.log('  GET    /api/messages/:uid  - Get conversations');
+    console.log('  POST   /api/messages       - Send a message');
     console.log('  GET    /health             - Health check');
 });
+
+// Graceful shutdown
+function gracefulShutdown(signal) {
+    console.log(`\n${signal} received. Shutting down gracefully...`);
+    server.close(() => {
+        console.log('HTTP server closed.');
+        db.close((err) => {
+            if (err) console.error('Error closing database:', err.message);
+            else console.log('Database connection closed.');
+            process.exit(0);
+        });
+    });
+
+    // Force shutdown after 10 seconds
+    setTimeout(() => {
+        console.error('Could not close connections in time, forcing shutdown.');
+        process.exit(1);
+    }, 10000);
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 module.exports = app;
