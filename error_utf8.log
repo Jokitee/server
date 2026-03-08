@@ -1,65 +1,68 @@
-﻿node : E:\FacingBook\server
-\node_modules\path-to-regex
-p\dist\index.js:96
+﻿node : node:internal/m
+odules/cjs/loader:1423
 所在位置 行:1 字符: 1
-+ node server.js > error.lo
-g 2>&1 ; cat error.log
-+ ~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~~~~
-    + CategoryInfo         
-     : NotSpecified: (E:\  
-  FacingBook\s...ist\ind   
- ex.js:96:String) [], R    
-emoteException
-    + FullyQualifiedErrorI 
-   d : NativeCommandError
++ node server.js > err
+or.log 2>&1
++ ~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~
+    + CategoryInfo    
+          : NotSpeci  
+  fied: (node:inter   
+ nal/modules/cjs/l    
+oader:1423:String    )
+ [], RemoteExcep    ti
+on
+    + FullyQualifiedE 
+   rrorId : NativeCo  
+  mmandError
  
-            throw new PathE
-rror(`Missing parameter nam
-e at index ${index}`, str);
-            ^
+  throw err;
+  ^
 
-PathError [TypeError]: Miss
-ing parameter name at index
- 1: *; visit https://git.ne
-w/pathToRegexpError for inf
-o
-    at name (E:\FacingBook\
-server\node_modules\path-to
--regexp\dist\index.js:96:19
-)
-    at parse (E:\FacingBook
-\server\node_modules\path-t
-o-regexp\dist\index.js:113:
-68)
-    at pathToRegexp (E:\Fac
-ingBook\server\node_modules
-\path-to-regexp\dist\index.
-js:267:58)
-    at Object.match (E:\Fac
-ingBook\server\node_modules
-\path-to-regexp\dist\index.
-js:237:30)
-    at matcher (E:\FacingBo
-ok\server\node_modules\rout
-er\lib\layer.js:86:23)
-    at new Layer (E:\Facing
-Book\server\node_modules\ro
-uter\lib\layer.js:93:62)
-    at router.use (E:\Facin
-gBook\server\node_modules\r
-outer\index.js:398:19)
-    at app.<anonymous> (E:\
-FacingBook\server\node_modu
-les\express\lib\application
-.js:222:21)
-    at Array.forEach (<anon
-ymous>)
-    at app.use (E:\FacingBo
-ok\server\node_modules\expr
-ess\lib\application.js:219:
-7) {
-  originalPath: '*'
+Error: Cannot find mod
+ule 'multer'
+Require stack:
+- E:\FacingBook\server
+\server.js
+    at Module._resolve
+Filename (node:interna
+l/modules/cjs/loader:1
+420:15)
+    at defaultResolveI
+mpl (node:internal/mod
+ules/cjs/loader:1058:1
+9)
+    at resolveForCJSWi
+thHooks (node:internal
+/modules/cjs/loader:10
+63:22)
+    at Module._load (n
+ode:internal/modules/c
+js/loader:1226:37)
+    at TracingChannel.
+traceSync (node:diagno
+stics_channel:328:14)
+    at wrapModuleLoad 
+(node:internal/modules
+/cjs/loader:244:24)
+    at Module.require 
+(node:internal/modules
+/cjs/loader:1503:12)
+    at require (node:i
+nternal/modules/helper
+s:152:16)
+    at Object.<anonymo
+us> (E:\FacingBook\ser
+ver\server.js:6:16)
+    at Module._compile
+ (node:internal/module
+s/cjs/loader:1760:14) 
+{
+  code: 'MODULE_NOT_FO
+UND',
+  requireStack: [ 'E:\
+\FacingBook\\server\\s
+erver.js' ]
 }
 
 Node.js v24.10.0

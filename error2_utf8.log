@@ -1,0 +1,51 @@
+﻿[dotenv@17.3.1] injecting env (0) from .env -- tip: 馃攼 prevent building .env in docker: https://dotenvx.com/prebuild
+Connecting to database at: E:\FacingBook\server\database.sqlite
+Server is running on http://localhost:3000
+WebSocket server is running on ws://localhost:3000/ws
+
+Available endpoints:
+  GET    /api/books          - List books with search & filter
+  GET    /api/books/:id      - Get a specific book
+  POST   /api/books          - Create a new book listing
+  PUT    /api/books/:id/status - Update book status
+  POST   /api/upload         - Upload an image
+  POST   /api/users          - Create a new user
+  GET    /api/users/:id      - Get user info
+  GET    /api/messages/:uid  - Get conversations
+  POST   /api/messages       - Send a message
+  GET    /health             - Health check
+Connected to the SQLite database.
+Database initialization complete.
+node : <anonymous_scri
+pt>:0
+所在位置 行:1 字符: 1
++ node server.js > err
+or2.log 2>&1; Get-Cont
+ent -Encoding Unicode 
+error ...
++ ~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~
+    + CategoryInfo    
+          : NotSpeci  
+  fied: (<anonymous   
+ _script>:0:String    
+) [], RemoteExcep    t
+ion
+    + FullyQualifiedE 
+   rrorId : NativeCo  
+  mmandError
+ 
+
+
+[Error: SQLITE_ERROR: 
+no such column: catego
+ry
+Emitted 'error' event 
+on Statement instance 
+at:
+] {
+  errno: 1,
+  code: 'SQLITE_ERROR'
+}
+
+Node.js v24.10.0

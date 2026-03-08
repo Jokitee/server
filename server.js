@@ -4,8 +4,16 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const http = require('http');
+const WebSocket = require('ws');
+
+require('dotenv').config();
+const jwt = require('jsonwebtoken');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'your_super_secret_jwt_key_here';
 
 const app = express();
+const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 
 // ============================================================
@@ -125,50 +133,65 @@ const db = new sqlite3.Database(dbPath, (err) => {
             FOREIGN KEY (buyer_id) REFERENCES users(id) ON DELETE SET NULL
         )`);
 
-        // Create indexes for books
-        db.run('CREATE INDEX IF NOT EXISTS idx_books_title ON books(title)');
-        db.run('CREATE INDEX IF NOT EXISTS idx_books_isbn ON books(isbn)');
-        db.run('CREATE INDEX IF NOT EXISTS idx_books_status ON books(status)');
-        db.run('CREATE INDEX IF NOT EXISTS idx_books_category ON books(category)');
-        db.run('CREATE INDEX IF NOT EXISTS idx_books_seller_id ON books(seller_id)');
-        db.run('CREATE INDEX IF NOT EXISTS idx_books_created_at ON books(created_at)');
-        db.run('CREATE INDEX IF NOT EXISTS idx_books_university ON books(university)');
-
-        // Create Messages Table
-        db.run(`CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sender_id INTEGER NOT NULL,
-            receiver_id INTEGER NOT NULL,
-            book_id INTEGER,
-            content TEXT NOT NULL,
-            is_read BOOLEAN DEFAULT 0,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
-            FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE,
-            FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE SET NULL
-        )`);
-
-        // Create indexes for messages
-        db.run('CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id)');
-        db.run('CREATE INDEX IF NOT EXISTS idx_messages_receiver ON messages(receiver_id)');
-        db.run('CREATE INDEX IF NOT EXISTS idx_messages_book ON messages(book_id)');
-
         // Safe schema migrations for existing databases
         const migrations = [
             "ALTER TABLE users ADD COLUMN avatar_url TEXT;",
             "ALTER TABLE users ADD COLUMN university TEXT;",
+            "ALTER TABLE users ADD COLUMN openid TEXT UNIQUE;",
+            "ALTER TABLE books ADD COLUMN category TEXT;",
             "ALTER TABLE books ADD COLUMN university TEXT;"
         ];
 
-        migrations.forEach(sql => {
-            db.run(sql, (err) => {
-                if (err && !err.message.includes('duplicate column name')) {
-                    console.error(`Migration error (${sql}):`, err.message);
-                }
-            });
-        });
+        let completedMigrations = 0;
+        const totalMigrations = migrations.length;
 
-        console.log('Database initialization complete.');
+        const checkCompletionAndCreateIndexes = () => {
+            completedMigrations++;
+            if (completedMigrations === totalMigrations) {
+                // Create indexes for books AFTER migrations
+                db.run('CREATE INDEX IF NOT EXISTS idx_books_title ON books(title)');
+                db.run('CREATE INDEX IF NOT EXISTS idx_books_isbn ON books(isbn)');
+                db.run('CREATE INDEX IF NOT EXISTS idx_books_status ON books(status)');
+                db.run('CREATE INDEX IF NOT EXISTS idx_books_category ON books(category)');
+                db.run('CREATE INDEX IF NOT EXISTS idx_books_seller_id ON books(seller_id)');
+                db.run('CREATE INDEX IF NOT EXISTS idx_books_created_at ON books(created_at)');
+                db.run('CREATE INDEX IF NOT EXISTS idx_books_university ON books(university)');
+
+                // Create Messages Table
+                db.run(`CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sender_id INTEGER NOT NULL,
+                    receiver_id INTEGER NOT NULL,
+                    book_id INTEGER,
+                    content TEXT NOT NULL,
+                    is_read BOOLEAN DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE SET NULL
+                )`);
+
+                // Create indexes for messages
+                db.run('CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id)');
+                db.run('CREATE INDEX IF NOT EXISTS idx_messages_receiver ON messages(receiver_id)');
+                db.run('CREATE INDEX IF NOT EXISTS idx_messages_book ON messages(book_id)');
+
+                console.log('Database initialization complete.');
+            }
+        };
+
+        if (totalMigrations === 0) {
+            checkCompletionAndCreateIndexes();
+        } else {
+            migrations.forEach(sql => {
+                db.run(sql, (err) => {
+                    if (err && !err.message.includes('duplicate column name')) {
+                        console.error(`Migration error (${sql}):`, err.message);
+                    }
+                    checkCompletionAndCreateIndexes();
+                });
+            });
+        }
     });
 });
 
@@ -286,8 +309,59 @@ const validateBookData = (req, res, next) => {
 // API Routes
 // ============================================================
 
+// --- Authentication ---
+const authMiddleware = (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Unauthorized: No token provided' });
+    }
+
+    const token = authHeader.split(' ')[1];
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        req.user = decoded; // { userId: ... }
+        next();
+    } catch (err) {
+        return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+    }
+};
+
+app.post('/api/login', (req, res) => {
+    const { code } = req.body;
+    if (!code) {
+        return res.status(400).json({ error: 'Login code is required' });
+    }
+
+    // MOCK LOGIN LOGIC:
+    const mockOpenId = 'mock_open_id_' + code.substring(0, 10);
+
+    db.get('SELECT id, username FROM users WHERE openid = ?', [mockOpenId], (err, row) => {
+        if (err) {
+            console.error('Database error in mock login:', err);
+            return res.status(500).json({ error: 'Internal server error' });
+        }
+
+        const sendTokenResponse = (id) => {
+            const token = jwt.sign({ userId: id }, JWT_SECRET, { expiresIn: '7d' });
+            res.json({ token, userId: id });
+        };
+
+        if (row) {
+            sendTokenResponse(row.id);
+        } else {
+            // Create user
+            const mockUsername = '用户_' + Math.random().toString(36).substring(2, 8);
+            const createSql = 'INSERT INTO users (username, openid) VALUES (?, ?)';
+            db.run(createSql, [mockUsername, mockOpenId], function (createErr) {
+                if (createErr) { return res.status(500).json({ error: 'Internal server error creating user' }); }
+                sendTokenResponse(this.lastID);
+            });
+        }
+    });
+});
+
 // --- File Upload ---
-app.post('/api/upload', upload.single('image'), (req, res) => {
+app.post('/api/upload', authMiddleware, upload.single('image'), (req, res) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No image file provided' });
     }
@@ -444,71 +518,42 @@ app.get('/api/books/:id', (req, res) => {
 });
 
 // 3. POST /api/books (Publish a new book)
-app.post('/api/books', validateBookData, (req, res) => {
-    const { title, author, isbn, price, original_price, condition, description, category, university, image_urls, seller_id } = req.body;
+app.post('/api/books', authMiddleware, validateBookData, (req, res) => {
+    const { title, author, isbn, price, original_price, condition, description, category, university, image_urls } = req.body;
+    const seller_id = req.user.userId;
 
-    if (seller_id) {
-        db.get('SELECT id FROM users WHERE id = ?', [seller_id], (err, row) => {
-            if (err) {
-                console.error('Database error checking seller:', err);
-                return res.status(500).json({ error: 'Internal server error' });
+    const sql = `
+        INSERT INTO books (title, author, isbn, price, original_price, condition, description, category, university, image_urls, seller_id, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available')
+    `;
+    const params = [
+        title.trim(),
+        author || null,
+        isbn.trim(),
+        price,
+        original_price || null,
+        condition || 'good',
+        description,
+        category || null,
+        university || null,
+        image_urls || null,
+        seller_id
+    ];
+
+    db.run(sql, params, function (err) {
+        if (err) {
+            console.error('Database error inserting book:', err);
+            if (err.message.includes('UNIQUE constraint failed')) {
+                return res.status(400).json({ error: 'A book with this ISBN already exists' });
             }
+            return res.status(500).json({ error: 'Internal server error' });
+        }
 
-            if (!row) {
-                // Auto-create a default user so publishing always works
-                db.run('INSERT OR IGNORE INTO users (username, university) VALUES (?, ?)',
-                    [`校友_${seller_id}`, university || null],
-                    function (createErr) {
-                        if (createErr) {
-                            console.error('Error auto-creating user:', createErr);
-                        }
-                        req.body.seller_id = this.lastID || seller_id;
-                        insertBook();
-                    }
-                );
-                return;
-            }
-
-            insertBook();
+        res.status(201).json({
+            message: 'Book published successfully',
+            bookId: this.lastID
         });
-    } else {
-        insertBook();
-    }
-
-    function insertBook() {
-        const sql = `
-            INSERT INTO books (title, author, isbn, price, original_price, condition, description, category, university, image_urls, seller_id, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available')
-        `;
-        const params = [
-            title.trim(),
-            author || null,
-            isbn.trim(),
-            price,
-            original_price || null,
-            condition || 'good',
-            description,
-            category || null,
-            university || null,
-            image_urls || null,
-            req.body.seller_id || null
-        ];
-
-        db.run(sql, params, function (err) {
-            if (err) {
-                console.error('Database error inserting book:', err);
-                if (err.message.includes('UNIQUE constraint failed')) {
-                    return res.status(400).json({ error: 'A book with this ISBN already exists' });
-                }
-                return res.status(500).json({ error: 'Internal server error' });
-            }
-
-            res.status(201).json({
-                message: 'Book published successfully',
-                bookId: this.lastID
-            });
-        });
-    }
+    });
 });
 
 // --- Users ---
@@ -572,12 +617,41 @@ app.get('/api/users/:id', (req, res) => {
     });
 });
 
+// 5.1 GET /api/users/me/published (Get books published by me)
+app.get('/api/users/me/published', authMiddleware, (req, res) => {
+    const userId = req.user.userId;
+    const sql = `SELECT * FROM books WHERE seller_id = ? ORDER BY created_at DESC`;
+
+    db.all(sql, [userId], (err, rows) => {
+        if (err) {
+            console.error('Database error fetching published books:', err);
+            return res.status(500).json({ error: 'Internal server error' });
+        }
+        res.json({ data: rows });
+    });
+});
+
+// 5.2 GET /api/users/me/bought (Get books bought by me)
+app.get('/api/users/me/bought', authMiddleware, (req, res) => {
+    const userId = req.user.userId;
+    const sql = `SELECT * FROM books WHERE buyer_id = ? ORDER BY created_at DESC`;
+
+    db.all(sql, [userId], (err, rows) => {
+        if (err) {
+            console.error('Database error fetching bought books:', err);
+            return res.status(500).json({ error: 'Internal server error' });
+        }
+        res.json({ data: rows });
+    });
+});
+
 // --- Book Status ---
 
 // 6. PUT /api/books/:id/status (Update book status)
-app.put('/api/books/:id/status', (req, res) => {
+app.put('/api/books/:id/status', authMiddleware, (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
+    const userId = req.user.userId;
 
     if (!id || isNaN(id) || parseInt(id) <= 0) {
         return res.status(400).json({ error: 'Invalid book ID' });
@@ -588,35 +662,97 @@ app.put('/api/books/:id/status', (req, res) => {
         return res.status(400).json({ error: 'Invalid status. Must be one of: available, reserved, sold, inactive' });
     }
 
-    const sql = 'UPDATE books SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?';
-
-    db.run(sql, [status, id], function (err) {
-        if (err) {
-            console.error('Database error updating book status:', err);
-            return res.status(500).json({ error: 'Internal server error' });
-        }
-
-        if (this.changes === 0) {
+    // Ensure only seller can update status
+    db.get('SELECT seller_id FROM books WHERE id = ?', [id], (err, row) => {
+        if (err || !row) {
             return res.status(404).json({ error: 'Book not found' });
         }
+        if (row.seller_id !== userId) {
+            return res.status(403).json({ error: 'Forbidden: You are not the seller of this book' });
+        }
 
-        res.json({
-            message: 'Book status updated successfully',
-            bookId: parseInt(id),
-            newStatus: status
+        const sql = 'UPDATE books SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?';
+
+        db.run(sql, [status, id], function (err) {
+            if (err) {
+                console.error('Database error updating book status:', err);
+                return res.status(500).json({ error: 'Internal server error' });
+            }
+
+            res.json({
+                message: 'Book status updated successfully',
+                bookId: parseInt(id),
+                newStatus: status
+            });
+        });
+    });
+});
+
+// 6.1 POST /api/books/:id/purchase (Purchase a book)
+app.post('/api/books/:id/purchase', authMiddleware, (req, res) => {
+    const { id } = req.params;
+    const userId = req.user.userId;
+
+    if (!id || isNaN(id) || parseInt(id) <= 0) {
+        return res.status(400).json({ error: 'Invalid book ID' });
+    }
+
+    db.get('SELECT seller_id, status FROM books WHERE id = ?', [id], (err, row) => {
+        if (err || !row) {
+            return res.status(404).json({ error: 'Book not found' });
+        }
+        if (row.seller_id === userId) {
+            return res.status(400).json({ error: 'You cannot buy your own book' });
+        }
+        if (row.status !== 'available') {
+            return res.status(400).json({ error: 'Book is not available for purchase' });
+        }
+
+        const sql = "UPDATE books SET status = 'sold', buyer_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?";
+        db.run(sql, [userId, id], function (updateErr) {
+            if (updateErr) {
+                console.error('Database error purchasing book:', updateErr);
+                return res.status(500).json({ error: 'Internal server error' });
+            }
+            res.json({ message: 'Purchase successful', bookId: id });
+        });
+    });
+});
+
+// 6.2 DELETE /api/books/:id (Delete book)
+app.delete('/api/books/:id', authMiddleware, (req, res) => {
+    const { id } = req.params;
+    const userId = req.user.userId;
+
+    if (!id || isNaN(id) || parseInt(id) <= 0) {
+        return res.status(400).json({ error: 'Invalid book ID' });
+    }
+
+    // First check seller
+    db.get('SELECT seller_id, image_urls FROM books WHERE id = ?', [id], (err, row) => {
+        if (err || !row) {
+            return res.status(404).json({ error: 'Book not found' });
+        }
+        if (row.seller_id !== userId) {
+            return res.status(403).json({ error: 'Forbidden: You are not the seller' });
+        }
+
+        // Delete record
+        db.run('DELETE FROM books WHERE id = ?', [id], function (delErr) {
+            if (delErr) {
+                console.error('Database error deleting book:', delErr);
+                return res.status(500).json({ error: 'Internal server error' });
+            }
+            res.json({ message: 'Book deleted successfully' });
         });
     });
 });
 
 // --- Messages ---
 
-// 7. GET /api/messages/:userId (Get latest conversations for user)
-app.get('/api/messages/:userId', (req, res) => {
-    const { userId } = req.params;
-
-    if (!userId || isNaN(userId)) {
-        return res.status(400).json({ error: 'Invalid user ID' });
-    }
+// 7. GET /api/messages/me (Get latest conversations for user)
+app.get('/api/messages/me', authMiddleware, (req, res) => {
+    const userId = req.user.userId;
 
     const sql = `
         SELECT m1.*,
@@ -644,12 +780,13 @@ app.get('/api/messages/:userId', (req, res) => {
     });
 });
 
-// 8. GET /api/messages/session/:userId/:otherUserId (Get messages between two users)
-app.get('/api/messages/session/:userId/:otherUserId', (req, res) => {
-    const { userId, otherUserId } = req.params;
+// 8. GET /api/messages/session/:otherUserId (Get messages between two users)
+app.get('/api/messages/session/:otherUserId', authMiddleware, (req, res) => {
+    const userId = req.user.userId;
+    const { otherUserId } = req.params;
 
-    if (!userId || isNaN(userId) || !otherUserId || isNaN(otherUserId)) {
-        return res.status(400).json({ error: 'Invalid user IDs' });
+    if (!otherUserId || isNaN(otherUserId)) {
+        return res.status(400).json({ error: 'Invalid other user ID' });
     }
 
     const sql = `
@@ -675,42 +812,53 @@ app.get('/api/messages/session/:userId/:otherUserId', (req, res) => {
 });
 
 // 9. POST /api/messages (Send new message)
-app.post('/api/messages', (req, res) => {
-    const { sender_id, receiver_id, book_id, content } = req.body;
+app.post('/api/messages', authMiddleware, (req, res) => {
+    const { receiver_id, book_id, content } = req.body;
+    const sender_id = req.user.userId;
 
-    if (!sender_id || !receiver_id || !content || content.trim() === '') {
-        return res.status(400).json({ error: 'Sender, receiver, and content are required' });
+    if (!receiver_id || !content || content.trim() === '') {
+        return res.status(400).json({ error: 'Receiver and content are required' });
     }
 
-    // Validate that both users exist
-    db.get('SELECT id FROM users WHERE id = ?', [sender_id], (err, senderRow) => {
+    db.get('SELECT id FROM users WHERE id = ?', [receiver_id], (err, receiverRow) => {
         if (err) {
-            console.error('Database error checking sender:', err);
+            console.error('Database error checking receiver:', err);
             return res.status(500).json({ error: 'Internal server error' });
         }
-        if (!senderRow) {
-            return res.status(400).json({ error: 'Sender user not found' });
+        if (!receiverRow) {
+            return res.status(400).json({ error: 'Receiver user not found' });
         }
 
-        db.get('SELECT id FROM users WHERE id = ?', [receiver_id], (err, receiverRow) => {
+        const sql = 'INSERT INTO messages (sender_id, receiver_id, book_id, content) VALUES (?, ?, ?, ?)';
+        const params = [sender_id, receiver_id, book_id || null, content.trim()];
+
+        db.run(sql, params, function (err) {
             if (err) {
-                console.error('Database error checking receiver:', err);
+                console.error('Database error inserting message:', err);
                 return res.status(500).json({ error: 'Internal server error' });
             }
-            if (!receiverRow) {
-                return res.status(400).json({ error: 'Receiver user not found' });
+
+            const messageId = this.lastID;
+
+            // Broadcast via WebSocket
+            if (activeClients.has(parseInt(receiver_id))) {
+                const receiverWs = activeClients.get(parseInt(receiver_id));
+                if (receiverWs.readyState === WebSocket.OPEN) {
+                    receiverWs.send(JSON.stringify({
+                        type: 'NEW_MESSAGE',
+                        payload: {
+                            id: messageId,
+                            sender_id,
+                            receiver_id: parseInt(receiver_id),
+                            book_id,
+                            content: content.trim(),
+                            created_at: new Date().toISOString()
+                        }
+                    }));
+                }
             }
 
-            const sql = 'INSERT INTO messages (sender_id, receiver_id, book_id, content) VALUES (?, ?, ?, ?)';
-            const params = [sender_id, receiver_id, book_id || null, content.trim()];
-
-            db.run(sql, params, function (err) {
-                if (err) {
-                    console.error('Database error inserting message:', err);
-                    return res.status(500).json({ error: 'Internal server error' });
-                }
-                res.status(201).json({ message: 'Message sent', messageId: this.lastID });
-            });
+            res.status(201).json({ message: 'Message sent', messageId });
         });
     });
 });
@@ -767,8 +915,39 @@ app.use((err, req, res, next) => {
 // Server Start & Graceful Shutdown
 // ============================================================
 
-const server = app.listen(PORT, '0.0.0.0', () => {
+const activeClients = new Map();
+const wss = new WebSocket.Server({ server, path: '/ws' });
+
+wss.on('connection', (ws, req) => {
+    // Expected path /ws?token=XYZ
+    const urlParams = new URLSearchParams(req.url.split('?')[1] || '');
+    const token = urlParams.get('token');
+
+    if (!token) {
+        ws.close(4001, 'Unauthorized');
+        return;
+    }
+
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const userId = decoded.userId;
+        activeClients.set(userId, ws);
+
+        ws.on('close', () => {
+            if (activeClients.get(userId) === ws) {
+                activeClients.delete(userId);
+            }
+        });
+
+        ws.on('error', console.error);
+    } catch (err) {
+        ws.close(4001, 'Unauthorized');
+    }
+});
+
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`Server is running on http://localhost:${PORT}`);
+    console.log(`WebSocket server is running on ws://localhost:${PORT}/ws`);
     console.log('\nAvailable endpoints:');
     console.log('  GET    /api/books          - List books with search & filter');
     console.log('  GET    /api/books/:id      - Get a specific book');
