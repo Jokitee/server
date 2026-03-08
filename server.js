@@ -558,64 +558,7 @@ app.post('/api/books', authMiddleware, validateBookData, (req, res) => {
 
 // --- Users ---
 
-// 4. POST /api/users (Create a new user)
-app.post('/api/users', (req, res) => {
-    const { username, contact_info, email, phone, avatar_url, university } = req.body;
-
-    if (!username || username.trim().length === 0) {
-        return res.status(400).json({ error: 'Username is required' });
-    }
-
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        return res.status(400).json({ error: 'Invalid email format' });
-    }
-
-    if (phone && !/^[\+]?[1-9][\d]{0,15}$/.test(phone.replace(/[-\s\(\)]/g, ''))) {
-        return res.status(400).json({ error: 'Invalid phone number format' });
-    }
-
-    const sql = 'INSERT INTO users (username, contact_info, email, phone, avatar_url, university) VALUES (?, ?, ?, ?, ?, ?)';
-    const params = [username.trim(), contact_info || null, email || null, phone || null, avatar_url || null, university || null];
-
-    db.run(sql, params, function (err) {
-        if (err) {
-            console.error('Database error inserting user:', err);
-            if (err.message.includes('UNIQUE constraint failed')) {
-                return res.status(400).json({ error: 'Username already exists' });
-            }
-            return res.status(500).json({ error: 'Internal server error' });
-        }
-
-        res.status(201).json({
-            message: 'User created successfully',
-            userId: this.lastID
-        });
-    });
-});
-
-// 5. GET /api/users/:id (Get user info)
-app.get('/api/users/:id', (req, res) => {
-    const { id } = req.params;
-
-    if (!id || isNaN(id) || parseInt(id) <= 0) {
-        return res.status(400).json({ error: 'Invalid user ID' });
-    }
-
-    const sql = 'SELECT id, username, contact_info, email, phone, avatar_url, university, created_at, updated_at FROM users WHERE id = ?';
-
-    db.get(sql, [id], (err, row) => {
-        if (err) {
-            console.error('Database error:', err);
-            return res.status(500).json({ error: 'Internal server error' });
-        }
-
-        if (!row) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        res.json({ data: row });
-    });
-});
+// --- Users ---
 
 // 5.1 GET /api/users/me/published (Get books published by me)
 app.get('/api/users/me/published', authMiddleware, (req, res) => {
@@ -883,9 +826,9 @@ app.get('/', (req, res) => {
             'POST   /api/books': 'Create a new book listing',
             'PUT    /api/books/:id/status': 'Update book status',
             'POST   /api/upload': 'Upload an image file',
-            'POST   /api/users': 'Create a new user',
-            'GET    /api/users/:id': 'Get user info',
-            'GET    /api/messages/:userId': 'Get conversations',
+            'GET    /api/users/me/published': 'Get published books',
+            'GET    /api/users/me/bought': 'Get bought books',
+            'GET    /api/messages/me': 'Get conversations',
             'GET    /api/messages/session/:uid1/:uid2': 'Get chat history',
             'POST   /api/messages': 'Send a message',
             'GET    /health': 'Health check'
@@ -954,9 +897,7 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log('  POST   /api/books          - Create a new book listing');
     console.log('  PUT    /api/books/:id/status - Update book status');
     console.log('  POST   /api/upload         - Upload an image');
-    console.log('  POST   /api/users          - Create a new user');
-    console.log('  GET    /api/users/:id      - Get user info');
-    console.log('  GET    /api/messages/:uid  - Get conversations');
+    console.log('  GET    /api/messages/me    - Get conversations (auth)');
     console.log('  POST   /api/messages       - Send a message');
     console.log('  GET    /health             - Health check');
 });
